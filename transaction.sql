@@ -1,50 +1,55 @@
 -- ==========================================================
--- HOTEL MANAGEMENT SYSTEM: TRIGGERS & STORED PROCEDURES
--- Purpose: Automate booking, payment, and room management
--- Database: hotel_management
+-- DATABASE: hotel_management
+-- PURPOSE: Manage hotel bookings, payments, rooms, services
+-- Includes: Triggers and Stored Procedures
 -- ==========================================================
 
 USE hotel_management;
 
 -- ==========================================================
--- TRIGGER 1: Update Room Status After Booking Insert
--- Purpose:
---   Automatically marks a room as 'Occupied' when a new booking is created.
+-- 1️⃣ TRIGGER 1: Update Room Status After Booking Insert
+--    Automatically marks a room as 'Occupied' when a new booking is created
 -- ==========================================================
+DROP TRIGGER IF EXISTS after_booking_insert;
+
 DELIMITER $$
 CREATE TRIGGER after_booking_insert
 AFTER INSERT ON Bookings
 FOR EACH ROW
 BEGIN
+    -- Update the room status to 'Occupied' after booking is inserted
     UPDATE Rooms
     SET status = 'Occupied'
     WHERE room_id = NEW.room_id;
 END$$
 DELIMITER ;
 
--- ✅ Test Trigger 1
-INSERT INTO Bookings (guest_id, room_id, check_in_date, check_out_date, no_of_guests, booking_status)
-VALUES (1, 3, '2025-10-10', '2025-10-12', 2, 'Confirmed');
+-- Test Trigger 1
+SELECT room_id, room_no, status FROM Rooms WHERE room_id = 3;  -- Before inserting booking
 
-SELECT room_id, status FROM Rooms WHERE room_id = 3;
+INSERT INTO Bookings (guest_id, room_id, check_in_date, check_out_date, no_of_guests, booking_status, staff_id)
+VALUES (1, 1, '2025-10-10', '2025-10-12', 2, 'Confirmed', 1);
 
+SELECT room_id, room_no, status FROM Rooms WHERE room_id = 1;  -- After trigger
 
 -- ==========================================================
--- TRIGGER 2: Refund Payment After Booking Cancel
--- Purpose:
---   Automatically refunds payment and marks room as 'Available' when booking is cancelled.
+-- 2️⃣ TRIGGER 2: Refund Payment After Booking Cancel
+--    Automatically refunds payment and marks room 'Available' when booking is cancelled
 -- ==========================================================
 DROP TRIGGER IF EXISTS after_booking_cancel;
+
 DELIMITER $$
 CREATE TRIGGER after_booking_cancel
 AFTER UPDATE ON Bookings
 FOR EACH ROW
 BEGIN
     IF NEW.booking_status = 'Cancelled' THEN
+        -- Refund the payment
         UPDATE Payment
         SET status = 'Refunded'
         WHERE booking_id = NEW.booking_id;
 
+        -- Set room status back to 'Available'
         UPDATE Rooms
         SET status = 'Available'
         WHERE room_id = NEW.room_id;
@@ -52,26 +57,29 @@ BEGIN
 END$$
 DELIMITER ;
 
--- Ensure Payment status column supports all required values
+-- Ensure Payment status column includes 'Refunded'
 ALTER TABLE Payment 
 MODIFY COLUMN status ENUM('Pending','Completed','Failed','Refunded') DEFAULT 'Pending';
 
--- ✅ Test Trigger 2
+-- Test Trigger 2
+SELECT booking_id, booking_status FROM Bookings WHERE booking_id = 1;
+SELECT room_id, status FROM Rooms WHERE room_id = 1;
+SELECT payment_id, status FROM Payment WHERE booking_id = 1;
+
 UPDATE Bookings
 SET booking_status = 'Cancelled'
-WHERE booking_id = 3;
+WHERE booking_id = 1;
 
-SELECT booking_id, booking_status FROM Bookings WHERE booking_id = 3;
-SELECT room_id, status FROM Rooms WHERE room_id = (SELECT room_id FROM Bookings WHERE booking_id = 3);
-SELECT booking_id, status FROM Payment WHERE booking_id = 3;
-
+SELECT booking_id, booking_status FROM Bookings WHERE booking_id = 1;
+SELECT room_id, status FROM Rooms WHERE room_id = 1;
+SELECT payment_id, status FROM Payment WHERE booking_id = 1;
 
 -- ==========================================================
--- TRIGGER 3: Insert Default Service Charge
--- Purpose:
---   Automatically adds a pending payment entry whenever a new service is booked.
+-- 3️⃣ TRIGGER 3: Insert Default Service Charge
+--    Automatically adds a pending payment whenever a new service is booked
 -- ==========================================================
 DROP TRIGGER IF EXISTS after_service_insert;
+
 DELIMITER $$
 CREATE TRIGGER after_service_insert
 AFTER INSERT ON Booking_Service
@@ -82,17 +90,29 @@ BEGIN
 END$$
 DELIMITER ;
 
--- ✅ Test Trigger 3
+-- Test Trigger 3
 INSERT INTO Booking_Service (booking_id, service_id, quantity)
-VALUES (4, 2, 1);
+VALUES (2, 1, 2);
 
-SELECT * FROM Payment WHERE booking_id = 4 ORDER BY payment_id DESC LIMIT 1;
-
+SELECT * FROM Payment
+WHERE booking_id = 2
+ORDER BY payment_id DESC
+LIMIT 5;
 
 -- ==========================================================
--- PROCEDURE 1: make_booking
--- Purpose:
---   Creates a booking, generates a payment, and updates room status (transaction-safe).
+-- 4️⃣ Drop Existing Procedures (if any)
+-- ==========================================================
+DROP PROCEDURE IF EXISTS make_booking;
+DROP PROCEDURE IF EXISTS cancel_booking;
+DROP PROCEDURE IF EXISTS check_in;
+DROP PROCEDURE IF EXISTS check_out;
+DROP PROCEDURE IF EXISTS add_service;
+DROP PROCEDURE IF EXISTS MakePayment;
+DROP PROCEDURE IF EXISTS GetGuestBookings;
+
+-- ==========================================================
+-- 5️⃣ PROCEDURE 1: make_booking
+--    Creates a booking, generates a payment, and updates room status
 -- ==========================================================
 DELIMITER $$
 CREATE PROCEDURE make_booking(
@@ -108,17 +128,20 @@ BEGIN
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
-        SELECT '❌ Error! Transaction Rolled Back' AS message;
+        SELECT '❌ Transaction Rolled Back' AS message;
     END;
 
     START TRANSACTION;
 
+    -- Insert booking
     INSERT INTO Bookings (guest_id, room_id, check_in_date, check_out_date, no_of_guests, booking_status)
     VALUES (p_guest_id, p_room_id, p_check_in, p_check_out, p_no_of_guests, 'Confirmed');
 
+    -- Insert payment
     INSERT INTO Payment (booking_id, amount, payment_date, payment_mode, status)
     VALUES (LAST_INSERT_ID(), p_amount, NOW(), p_payment_mode, 'Completed');
 
+    -- Update room status
     UPDATE Rooms
     SET status = 'Occupied'
     WHERE room_id = p_room_id;
@@ -128,17 +151,16 @@ BEGIN
 END$$
 DELIMITER ;
 
--- ✅ Test Procedure 1
-CALL make_booking(1, 4, '2025-10-15', '2025-10-18', 2, 5000.00, 'Credit Card');
-SELECT * FROM Bookings ORDER BY booking_id DESC;
-SELECT * FROM Payment ORDER BY payment_id DESC;
-SELECT * FROM Rooms WHERE room_id = 4;
+-- Test Procedure 1
+CALL make_booking(1, 1, '2025-10-10', '2025-10-12', 2, 3000.00, 'Credit Card');
 
+SELECT * FROM Bookings ORDER BY booking_id DESC LIMIT 1;
+SELECT * FROM Payment ORDER BY payment_id DESC LIMIT 1;
+SELECT room_id, status FROM Rooms WHERE room_id = 1;
 
 -- ==========================================================
--- PROCEDURE 2: cancel_booking
--- Purpose:
---   Cancels booking, refunds payment, and marks the room available.
+-- 6️⃣ PROCEDURE 2: cancel_booking
+--    Cancels booking, refunds payment, marks room available
 -- ==========================================================
 DELIMITER $$
 CREATE PROCEDURE cancel_booking(IN p_booking_id BIGINT)
@@ -164,17 +186,14 @@ BEGIN
 END$$
 DELIMITER ;
 
--- ✅ Test Procedure 2
-CALL cancel_booking(4);
-SELECT * FROM Bookings WHERE booking_id = 4;
-SELECT * FROM Payment WHERE booking_id = 4;
-SELECT * FROM Rooms WHERE room_id = (SELECT room_id FROM Bookings WHERE booking_id = 4);
-
+-- Test Procedure 2
+CALL cancel_booking(1);
+SELECT * FROM Bookings WHERE booking_id = 1;
+SELECT * FROM Payment WHERE booking_id = 1;
+SELECT room_id, status FROM Rooms WHERE room_id = (SELECT room_id FROM Bookings WHERE booking_id = 1);
 
 -- ==========================================================
--- PROCEDURE 3: check_in
--- Purpose:
---   Updates booking status to 'Checked-In' for guest arrival.
+-- 7️⃣ PROCEDURE 3: check_in
 -- ==========================================================
 DELIMITER $$
 CREATE PROCEDURE check_in(IN p_booking_id BIGINT)
@@ -187,15 +206,11 @@ BEGIN
 END$$
 DELIMITER ;
 
--- ✅ Test Procedure 3
-CALL check_in(5);
-SELECT booking_id, booking_status FROM Bookings WHERE booking_id = 5;
-
+CALL check_in(2);
+SELECT booking_id, booking_status FROM Bookings WHERE booking_id = 2;
 
 -- ==========================================================
--- PROCEDURE 4: check_out
--- Purpose:
---   Marks guest as checked-out and sets room to 'Available'.
+-- 8️⃣ PROCEDURE 4: check_out
 -- ==========================================================
 DELIMITER $$
 CREATE PROCEDURE check_out(IN p_booking_id BIGINT)
@@ -216,16 +231,12 @@ BEGIN
 END$$
 DELIMITER ;
 
--- ✅ Test Procedure 4
-CALL check_out(5);
-SELECT booking_id, booking_status FROM Bookings WHERE booking_id = 5;
-SELECT room_id, status FROM Rooms WHERE room_id = (SELECT room_id FROM Bookings WHERE booking_id = 5);
-
+CALL check_out(2);
+SELECT booking_id, booking_status FROM Bookings WHERE booking_id = 2;
+SELECT room_id, status FROM Rooms WHERE room_id = (SELECT room_id FROM Bookings WHERE booking_id = 2);
 
 -- ==========================================================
--- PROCEDURE 5: add_service
--- Purpose:
---   Adds a service for a booking and generates pending payment.
+-- 9️⃣ PROCEDURE 5: add_service
 -- ==========================================================
 DELIMITER $$
 CREATE PROCEDURE add_service(
@@ -253,16 +264,12 @@ BEGIN
 END$$
 DELIMITER ;
 
--- ✅ Test Procedure 5
 CALL add_service(3, 1, 2);
 SELECT * FROM Booking_Service WHERE booking_id = 3;
-SELECT * FROM Payment WHERE booking_id = 3 ORDER BY payment_id DESC;
-
+SELECT * FROM Payment WHERE booking_id = 3 ORDER BY payment_id DESC LIMIT 1;
 
 -- ==========================================================
--- PROCEDURE 6: MakePayment
--- Purpose:
---   Adds payment record and updates booking status to 'Paid' (if not cancelled).
+-- 🔟 PROCEDURE 6: MakePayment
 -- ==========================================================
 DELIMITER $$
 CREATE PROCEDURE MakePayment (
@@ -281,16 +288,12 @@ BEGIN
 END$$
 DELIMITER ;
 
--- ✅ Test Procedure 6
 CALL MakePayment(3, 450.00, 'Cash');
-SELECT * FROM Payment WHERE booking_id = 3;
+SELECT * FROM Payment WHERE booking_id = 3 ORDER BY payment_id DESC LIMIT 1;
 SELECT booking_id, booking_status FROM Bookings WHERE booking_id = 3;
 
-
 -- ==========================================================
--- PROCEDURE 7: GetGuestBookings
--- Purpose:
---   Displays all bookings and related payment info for a given guest.
+-- 1️⃣1️⃣ PROCEDURE 7: GetGuestBookings
 -- ==========================================================
 DELIMITER $$
 CREATE PROCEDURE GetGuestBookings (
@@ -312,12 +315,10 @@ BEGIN
 END$$
 DELIMITER ;
 
--- ✅ Test Procedure 7
 CALL GetGuestBookings(1);
 
-
 -- ==========================================================
--- VERIFICATION COMMANDS
+-- VERIFICATION: Show all triggers and procedures
 -- ==========================================================
 SHOW TRIGGERS FROM hotel_management;
 SHOW PROCEDURE STATUS WHERE Db = 'hotel_management';

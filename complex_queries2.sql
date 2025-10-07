@@ -23,8 +23,9 @@ HAVING COUNT(b.booking_id) = (
 
 SELECT r.room_id, r.room_type, r.status
 FROM Rooms r
-LEFT JOIN Bookings b ON r.room_id = b.room_id
-WHERE b.booking_id IS NULL AND r.status = 'Available';
+JOIN Bookings b ON r.room_id = b.room_id
+WHERE r.status = 'Available';
+
 
 
 -- Most used service
